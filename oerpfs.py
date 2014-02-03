@@ -14,9 +14,8 @@ fuse.fuse_python_api = (0, 2)
 
 class OerpFS(fuse.Fuse):
     """
-    Fuse filesystem for simple OpenERP filestore access
+    Base class for OpenERP usage through fuse
     """
-
     def __init__(self, *args, **kwargs):
         super(OerpFS, self).__init__(*args, **kwargs)
 
@@ -28,16 +27,7 @@ class OerpFS(fuse.Fuse):
         self.parser.add_option(mountopt='oerp_user', default='admin', help='OpenERP username')
         self.parser.add_option(mountopt='oerp_passwd', default='admin', help='OpenERP user password')
 
-        self.ROOT_DIRS = {
-            'model': [self.readdir_model, self.getattr_model],
-        }
-
     def fsinit(self):
-        self.treetype = self.cmdline[0].treetype
-        if self.treetype not in self.ROOT_DIRS:
-            # TODO : Raise an error
-            pass
-
         # Initialize OpenERP Connection
         self.server = self.cmdline[0].oerp_server
         self.port = self.cmdline[0].oerp_port
@@ -46,26 +36,29 @@ class OerpFS(fuse.Fuse):
         self.password = self.cmdline[0].oerp_passwd
         self.oerp_connection = Connection(server=self.server, dbname=self.dbname, login=self.login, password=self.password, port=self.port)
 
+    def getSubclassInstance(self):
+        subclasses = {
+            'model': OerpFSModel,
+            'csvimport': OerpFSCsvImport,
+        }
+
+        return subclasses[self.cmdline[0].treetype]()
+
+
+class OerpFSModel(OerpFS):
+    """
+    Fuse filesystem for simple OpenERP filestore access
+    """
+    def __init__(self, *args, **kwargs):
+        super(OerpFSModel, self).__init__(*args, **kwargs)
+
     def getattr(self, path):
-        if path == '/':
-            fakeStat = fuse.Stat()
-            fakeStat.st_mode = stat.S_IFDIR | 0400
-            fakeStat.st_nlink = 0
-            return fakeStat
-
-        return self.ROOT_DIRS[self.treetype][1](path)
-
-    def readdir(self, path, offset):
-        yield fuse.Direntry('.')
-        yield fuse.Direntry('..')
-
-        for element in self.ROOT_DIRS[self.treetype][0](path, offset):
-            yield fuse.Direntry(element)
-
-    def getattr_model(self, path):
         fakeStat = fuse.Stat()
         fakeStat.st_mode = stat.S_IFDIR | 0400
         fakeStat.st_nlink = 0
+
+        if path == '/':
+            return fakeStat
 
         paths = path.split('/')[1:]
         if len(paths) > 3:
@@ -104,27 +97,29 @@ class OerpFS(fuse.Fuse):
         fakeStat.st_size = len(base64.b64decode(attachment_data['datas']))
         return fakeStat
 
-    def readdir_model(self, path, offset):
-        paths = path.split('/')[1:]
+    def readdir(self, path, offset):
+        yield fuse.Direntry('.')
+        yield fuse.Direntry('..')
 
+        paths = path.split('/')[1:]
         # List models
         if path == '/':
             model_obj = Object(self.oerp_connection, 'ir.model')
             model_ids = model_obj.search([])
             for model_data in model_obj.read(model_ids, ['model']):
-                yield model_data['model']
+                yield fuse.Direntry(model_data['model'])
         # List records
         elif len(paths) == 1:
             element_obj = Object(self.oerp_connection, paths[0])
             element_ids = element_obj.search([])
             for element_data in element_obj.read(element_ids, ['id']):
-                yield str(element_data['id'])
+                yield fuse.Direntry(str(element_data['id']))
         # List attachments
         else:
             attachment_obj = Object(self.oerp_connection, 'ir.attachment')
             attachment_ids = attachment_obj.search([('res_model', '=', paths[0]), ('res_id', '=', int(paths[1]))])
             for attachment_data in attachment_obj.read(attachment_ids, ['name']):
-                yield '%d-%s' % (attachment_data['id'], attachment_data['name'])
+                yield fuse.Direntry('%d-%s' % (attachment_data['id'], attachment_data['name']))
 
     def read(self, path, size, offset):
         paths = path.split('/')[1:]
@@ -138,7 +133,10 @@ class OerpFS(fuse.Fuse):
         return int(label.split('-')[0])
 
 if __name__ == '__main__':
-    fs = OerpFS()
+    tmpfs = OerpFS()
+    tmpfs.parse(errex=1)
+    fs = tmpfs.getSubclassInstance()
+    del tmpfs
     fs.fuse_args.mountpoint = sys.argv[1]
     fs.multithreaded = False
     fs.parse(errex=1)

@@ -93,8 +93,8 @@ class OerpFSModel(OerpFS):
         # TODO : Read the file size from a dedicated field (created in a specific module)
         attachment_obj = Object(self.oerp_connection, 'ir.attachment')
         attachment_ids = attachment_obj.search([('res_model', '=', paths[0]), ('res_id', '=', int(paths[1])), ('id', '=', self.id_from_label(paths[2]))])
-        attachment_data = attachment_obj.read(attachment_ids[0], ['datas'])
-        fakeStat.st_size = len(base64.b64decode(attachment_data['datas']))
+        attachment_data = attachment_obj.read(attachment_ids, ['datas'])
+        fakeStat.st_size = len(base64.b64decode(attachment_data[0]['datas']))
         return fakeStat
 
     def readdir(self, path, offset):
@@ -126,11 +126,12 @@ class OerpFSModel(OerpFS):
         # TODO : Create a module that allows to read files by slides
         attachment_obj = Object(self.oerp_connection, 'ir.attachment')
         attachment_ids = attachment_obj.search([('res_model', '=', paths[0]), ('res_id', '=', int(paths[1])), ('id', '=', self.id_from_label(paths[2]))])
-        attachment_data = attachment_obj.read(attachment_ids[0], ['datas'])
-        return base64.b64decode(attachment_data['datas'])[offset:size]
+        attachment_data = attachment_obj.read(attachment_ids, ['datas'])
+        return base64.b64decode(attachment_data[0]['datas'])[offset:offset + size]
 
     def id_from_label(self, label):
         return int(label.split('-')[0])
+
 
 if __name__ == '__main__':
     tmpfs = OerpFS()

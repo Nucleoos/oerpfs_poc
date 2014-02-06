@@ -2,10 +2,12 @@
 # -*- coding: utf-8 -*-
 
 import sys
+import csv
 import stat
 import fuse
 import base64
 from errno import ENOENT
+from StringIO import StringIO
 from oobjlib.connection import Connection
 from oobjlib.component import Object
 
@@ -39,6 +41,7 @@ class OerpFS(fuse.Fuse):
     def getSubclassInstance(self):
         subclasses = {
             'model': OerpFSModel,
+            'csvimport': OerpFSCsvImport,
         }
 
         return subclasses[self.cmdline[0].treetype]()
@@ -151,6 +154,99 @@ class OerpFSModel(OerpFS):
         Return the attachment ID from a file name : only the part before the first '-'
         """
         return int(label.split('-')[0])
+
+
+class OerpFSCsvImport(OerpFS):
+    """
+    Automatic CSV import to OpenERP on file copy
+    """
+    def __init__(self, *args, **kwargs):
+        super(OerpFSCsvImport, self).__init__(*args, **kwargs)
+
+        # Dict used to store files contents
+        self.files = {}
+
+    def getattr(self, path):
+        """
+        Only the root path exists, where we copy the CSV files to be imported
+        """
+        fakeStat = fuse.Stat()
+        fakeStat.st_mode = stat.S_IFDIR | 0200
+        fakeStat.st_nlink = 0
+
+        if path == '/':
+            return fakeStat
+
+        if path in self.files:
+            fakeStat.st_mode = stat.S_IFREG | 0200
+            fakeStat.st_nlink = 1
+            return fakeStat
+
+        return -ENOENT
+
+    def readdir(self, path, offset):
+        """
+        As only the root path exists, we only have to return the default entries
+        """
+        yield fuse.Direntry('.')
+        yield fuse.Direntry('..')
+
+        for path in self.files:
+            yield(fuse.Direntry(path))
+
+    def open(self, path, flags):
+        return 0
+
+    def create(self, path, mode, fi=None):
+        self.files[path] = StringIO()
+        return 0
+
+    def write(self, path, buf, offset):
+        """
+        Write the contents of a CSV file : store it in a variable
+        """
+        if not path in self.files:
+            return -ENOENT
+        self.files[path].write(buf)
+        return len(buf)
+
+    def flush(self, path):
+        return 0
+
+    def truncate(self, path, length):
+        return 0
+
+    def chmod(self, path):
+        return 0
+
+    def chown(self, path):
+        return 0
+
+    def utime(self, path, times=None):
+        return 0
+
+    def release(self, path, fh):
+        """
+        Writing of the file is finished, import the contents into OpenERP
+        """
+        # FIXME : Don't know why it doesn't work without rebuilding the StringIO object...
+        value = StringIO(self.files[path].getvalue())
+
+        # Parse the CSV file contents
+        csvFile = csv.reader(value)
+        lines = list(csvFile)
+
+        # Import data into OpenERP
+        model = path.replace('.csv', '')[1:]
+        oerpObject = Object(self.oerp_connection, model)
+        oerpObject.import_data(lines[0], lines[1:], 'init', '', False, {'import': True})
+
+        # Close StringIO and free memory
+        self.files[path].close()
+        del self.files[path]
+        value.close()
+        del value
+        return True
 
 
 if __name__ == '__main__':

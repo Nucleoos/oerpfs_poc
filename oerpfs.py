@@ -39,7 +39,6 @@ class OerpFS(fuse.Fuse):
     def getSubclassInstance(self):
         subclasses = {
             'model': OerpFSModel,
-            'csvimport': OerpFSCsvImport,
         }
 
         return subclasses[self.cmdline[0].treetype]()
@@ -53,6 +52,13 @@ class OerpFSModel(OerpFS):
         super(OerpFSModel, self).__init__(*args, **kwargs)
 
     def getattr(self, path):
+        """
+        Return attributes for the specified path :
+            - Search for the model as first part
+            - Search for an existing record as second part
+            - Search for an existing attachment as third part
+            - There cannot be more than 3 parts in the path
+        """
         fakeStat = fuse.Stat()
         fakeStat.st_mode = stat.S_IFDIR | 0400
         fakeStat.st_nlink = 0
@@ -98,6 +104,13 @@ class OerpFSModel(OerpFS):
         return fakeStat
 
     def readdir(self, path, offset):
+        """
+        Return content of a directory :
+            - List models for root path
+            - List records for a model
+            - List attachments for a record
+        We don't have to check for the path, because getattr already returns -ENOENT if the model/record/attachment doesn't exist
+        """
         yield fuse.Direntry('.')
         yield fuse.Direntry('..')
 
@@ -122,6 +135,10 @@ class OerpFSModel(OerpFS):
                 yield fuse.Direntry('%d-%s' % (attachment_data['id'], attachment_data['name']))
 
     def read(self, path, size, offset):
+        """
+        Return the specified slide of a file
+        Note : Only the beginning of the name is required (the ID of the attachment), we can put anything after the first '-', it will be ignored
+        """
         paths = path.split('/')[1:]
         # TODO : Create a module that allows to read files by slides
         attachment_obj = Object(self.oerp_connection, 'ir.attachment')
@@ -130,13 +147,18 @@ class OerpFSModel(OerpFS):
         return base64.b64decode(attachment_data[0]['datas'])[offset:offset + size]
 
     def id_from_label(self, label):
+        """
+        Return the attachment ID from a file name : only the part before the first '-'
+        """
         return int(label.split('-')[0])
 
 
 if __name__ == '__main__':
+    # First create an OerpFS instance, to parse the command line arguments, then ask for the good classe's instance
     tmpfs = OerpFS()
     tmpfs.parse(errex=1)
     fs = tmpfs.getSubclassInstance()
+    # Our first instance is now useless, destroy it
     del tmpfs
     fs.fuse_args.mountpoint = sys.argv[1]
     fs.multithreaded = False
